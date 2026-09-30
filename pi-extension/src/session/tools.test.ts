@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { Type } from "typebox";
 import { registerAgentTools } from "./tools.js";
 import { MeshTransportError, type SessionPeer, type AckResult } from "./peer.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -45,7 +46,7 @@ describe("agent_send tool (ACK protocol)", () => {
   test("unicast idle peer → calls sendWithAck, returns status=received", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -68,7 +69,7 @@ describe("agent_send tool (ACK protocol)", () => {
         { status: "busy", id: "uuid-out", target: "backend" } satisfies AckResult,
       ),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -91,7 +92,7 @@ describe("agent_send tool (ACK protocol)", () => {
         { status: "denied", id: "uuid-out", target: "backend" } satisfies AckResult,
       ),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -110,7 +111,7 @@ describe("agent_send tool (ACK protocol)", () => {
         { status: "timeout", id: "uuid-out" } satisfies AckResult,
       ),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -155,7 +156,7 @@ describe("agent_send tool (ACK protocol)", () => {
     const peer = makeMockPeer({
       sendWithAck: vi.fn().mockResolvedValue(ack),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -186,7 +187,7 @@ describe("agent_send tool (ACK protocol)", () => {
   test("forwards `re` for replies (correlation field)", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     await tool.execute(
@@ -206,7 +207,7 @@ describe("agent_send tool (ACK protocol)", () => {
   test("broadcast → fire-and-forget, status=sent, uses peer.send not sendWithAck", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -222,7 +223,7 @@ describe("agent_send tool (ACK protocol)", () => {
 
   test("not in a session → status=refused", async () => {
     const { pi, tools } = makeMockPi();
-    registerAgentTools(pi, () => null);
+    registerAgentTools(pi, () => null, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -241,7 +242,7 @@ describe("agent_send tool (ACK protocol)", () => {
   test("body as string passes through intact", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     await tool.execute(
@@ -255,7 +256,7 @@ describe("agent_send tool (ACK protocol)", () => {
   test("nested body object passes through intact", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const nested = { a: { b: { c: [1, 2, { d: "x" }] } }, e: null };
@@ -270,7 +271,7 @@ describe("agent_send tool (ACK protocol)", () => {
   test("self-send refused early → sendWithAck not called", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer({ name: "orq" });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_send")!;
 
     const result = await tool.execute(
@@ -309,7 +310,7 @@ describe("list_peers tool", () => {
   test("returns locals + cross-PC entries, excludes self", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeListPeersPeer(["orq", "backend", "casa:agent-1"]);
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("list_peers")!;
 
     const result = await tool.execute(TOOL_CALL_ID, {}, undefined, undefined, {} as never);
@@ -324,7 +325,7 @@ describe("list_peers tool", () => {
   test("empty inventory → (no peers) text", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeListPeersPeer(["orq"]);  // only self
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("list_peers")!;
 
     const result = await tool.execute(TOOL_CALL_ID, {}, undefined, undefined, {} as never);
@@ -334,7 +335,7 @@ describe("list_peers tool", () => {
 
   test("not in session → empty peers + NOT_IN_SESSION text", async () => {
     const { pi, tools } = makeMockPi();
-    registerAgentTools(pi, () => null);
+    registerAgentTools(pi, () => null, { Type });
     const tool = tools.get("list_peers")!;
 
     const result = await tool.execute(TOOL_CALL_ID, {}, undefined, undefined, {} as never);
@@ -347,7 +348,7 @@ describe("list_peers tool", () => {
     const peer = makeListPeersPeer([], {
       request: vi.fn().mockRejectedValue(new Error("request to broker timed out")),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("list_peers")!;
 
     const result = await tool.execute(TOOL_CALL_ID, {}, undefined, undefined, {} as never);
@@ -360,7 +361,7 @@ describe("agent_request tool (deprecated, still functional)", () => {
   test("legacy: calls SessionPeer.request → returns reply.body via details", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_request")!;
 
     const result = await tool.execute(
@@ -376,7 +377,7 @@ describe("agent_request tool (deprecated, still functional)", () => {
   test("custom timeout_ms is honored", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer();
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_request")!;
 
     await tool.execute(
@@ -389,7 +390,7 @@ describe("agent_request tool (deprecated, still functional)", () => {
 
   test("not in a session → structured error", async () => {
     const { pi, tools } = makeMockPi();
-    registerAgentTools(pi, () => null);
+    registerAgentTools(pi, () => null, { Type });
     const tool = tools.get("agent_request")!;
 
     const result = await tool.execute(
@@ -407,7 +408,7 @@ describe("agent_request tool (deprecated, still functional)", () => {
     const peer = makeMockPeer({
       request: vi.fn().mockRejectedValue(new Error("request to backend timed out after 5000ms")),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_request")!;
 
     const result = await tool.execute(
@@ -428,7 +429,7 @@ describe("agent_request tool (deprecated, still functional)", () => {
         new MeshTransportError("not_authorized", correlationId),
       ),
     });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_request")!;
 
     const result = await tool.execute(
@@ -447,7 +448,7 @@ describe("agent_request tool (deprecated, still functional)", () => {
   test("self-request refused early → request not called", async () => {
     const { pi, tools } = makeMockPi();
     const peer = makeMockPeer({ name: "orq" });
-    registerAgentTools(pi, () => peer);
+    registerAgentTools(pi, () => peer, { Type });
     const tool = tools.get("agent_request")!;
 
     const result = await tool.execute(

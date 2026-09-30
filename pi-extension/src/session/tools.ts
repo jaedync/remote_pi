@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import type * as TypeBox from "typebox";
 import type { TransportErrorReason } from "./envelope.js";
 import type { AckResult, SessionPeer } from "./peer.js";
 
@@ -50,11 +50,17 @@ interface SendDetails {
  *
  * `getSessionPeer` is a getter (not a captured value) so changes to the
  * underlying `_sessionPeer` module variable are observed live.
+ *
+ * `typebox` is passed in rather than imported because it is a host-provided
+ * peer: index.ts loads it only when running inside Pi, so the standalone CLI
+ * can import this module without it.
  */
 export function registerAgentTools(
   pi: ExtensionAPI,
   getSessionPeer: () => SessionPeer | null,
+  typebox: Pick<typeof TypeBox, "Type">,
 ): void {
+  const { Type } = typebox;
   const SendParams = Type.Object({
     to: Type.String({
       description:

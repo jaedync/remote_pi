@@ -38,7 +38,9 @@ import type {
   ExtensionFactory,
   TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
-import { SettingsManager, convertToPng } from "@earendil-works/pi-coding-agent";
+import type * as PiCodingAgent from "@earendil-works/pi-coding-agent";
+import type * as PiTui from "@earendil-works/pi-tui";
+import type * as TypeBox from "typebox";
 import { type Ed25519Keypair } from "./pairing/crypto.js";
 import { buildQRUri, qrSession, renderQRAscii, clampPairTtlMs, TOKEN_TTL_MS } from "./pairing/qr.js";
 import {
@@ -123,7 +125,39 @@ import {
   isWebSocketScheme,
   toWebSocketUrl,
 } from "./config.js";
-import { Box, Container, Image, Text } from "@earendil-works/pi-tui";
+
+// ── Host packages ─────────────────────────────────────────────────────────────
+//
+// Pi supplies these packages (declared as peerDependencies) when it loads the
+// extension, and its loader swaps in the host's copies for imports made from
+// this entry module. The standalone CLI (`remote-pi devices`, `peers`, …) runs
+// this same file under plain node, where an npm install has no copy of them,
+// so import them only inside Pi. Keep this ahead of other top-level code: Pi's
+// loader may evaluate the module natively first and retry through its
+// transpiler when a host import fails to resolve.
+interface HostModules {
+  readonly codingAgent: typeof PiCodingAgent;
+  readonly tui: typeof PiTui;
+  readonly typebox: typeof TypeBox;
+}
+
+const _host: HostModules | null = _isDirectRun() ? null : await _loadHostModules();
+
+async function _loadHostModules(): Promise<HostModules> {
+  const [codingAgent, tui, typebox] = await Promise.all([
+    import("@earendil-works/pi-coding-agent"),
+    import("@earendil-works/pi-tui"),
+    import("typebox"),
+  ]);
+  return { codingAgent, tui, typebox };
+}
+
+function _hostModules(): HostModules {
+  if (!_host) {
+    throw new Error("[remote-pi] Pi host packages are only available when running inside Pi.");
+  }
+  return _host;
+}
 
 // ── State machine ─────────────────────────────────────────────────────────────
 //
@@ -373,7 +407,7 @@ async function _renderablePngPathFromImage(
   if (mime === IMAGE_PREVIEW_MIME) return undefined;
 
   try {
-    const converted = await convertToPng(imageData, mime);
+    const converted = await _hostModules().codingAgent.convertToPng(imageData, mime);
     if (!converted || converted.mimeType !== IMAGE_PREVIEW_MIME || !converted.data) {
       return undefined;
     }
@@ -583,6 +617,7 @@ function _registerReceivedImageRenderer(pi: ExtensionAPI): void {
       if (reason) lines.push(theme.fg("customMessageText", `Reason: ${reason}`));
       if (text) lines.push(theme.fg("customMessageText", `Text: ${text}`));
 
+      const { Box, Container, Image, Text } = _hostModules().tui;
       const container = new Container();
       const metadata = new Box(1, 1, (line) => theme.bg("customMessageBg", line));
       metadata.addChild(new Text(lines.join("\n")));
@@ -2102,7 +2137,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // Plano 20: agent_send + agent_request tools so the LLM can drive the
   // session network natively. Getter captures `_meshNode` live so the
   // tool always sees the current state.
-  registerAgentTools(pi, () => _meshNode?.peer() ?? null);
+  registerAgentTools(pi, () => _meshNode?.peer() ?? null, _hostModules().typebox);
   _registerReceivedImageRenderer(pi);
 
   // Received-image preview entries are for local TUI display only. Pi's custom
@@ -2935,7 +2970,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
       if (live) {
         _currentModel = live.name ?? live.id ?? undefined;
       } else {
-        const sm = SettingsManager.create(cwd);
+        const sm = _hostModules().codingAgent.SettingsManager.create(cwd);
         const provider = sm.getDefaultProvider();
         const modelId = sm.getDefaultModel();
         if (modelId) {
