@@ -2377,8 +2377,13 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
   // "stale after session replacement" crash when the app taps Compact after a
   // New session. Fires on startup/new/fork/reload/resume; the ctx is always
   // bound to the current session.
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     _lastEventCtx = ctx;
+    // Pi evaluates this module fresh on /reload, /new, /resume and /fork, so the
+    // auto-init below runs again each time. Only the first start of the process
+    // shows the status block; a later re-init shows it only when something failed.
+    const reason = (event as { reason?: string } | undefined)?.reason;
+    const quiet = reason !== undefined && reason !== "startup";
     // session_shutdown disposes per-session pi-ask subscriptions. A host that
     // reuses this module instance does NOT re-run the factory, so rebind the
     // bridge here; fresh-module hosts already created theirs in the factory.
@@ -2398,7 +2403,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
       const restartAuthority: RootRestartAuthority = {
         rootLifecycleGeneration: _rootLifecycleGeneration,
       };
-      void _cmdRoot(ctx, restartAuthority);
+      void _cmdRoot(ctx, restartAuthority, { quiet });
     }
     // Auto-start remote-pi on a fresh boot when the cwd's local config has
     // auto_start_relay enabled (default true). Covers BOTH interactive
@@ -2442,7 +2447,7 @@ const extension: ExtensionFactory = (pi: ExtensionAPI): void => {
         const initCtx = isDaemon
           ? ({ ui: _headlessUi(), cwd: process.cwd() } as Pick<ExtensionContext, "ui" | "cwd">)
           : ctx;
-        void _cmdRoot(initCtx);
+        void _cmdRoot(initCtx, undefined, { quiet });
       }
     }
   });
@@ -2707,6 +2712,11 @@ async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
   ctx.ui.notify(`[remote-pi] peers:\n${formatPeerInventory(peers, selfName)}`, "info");
 }
 
+interface RootOptions {
+  /** A re-init after a session replacement: say nothing unless something failed. */
+  readonly quiet?: boolean;
+}
+
 /**
  * Root handler for `/remote-pi`. On first run (no local config) drops into
  * the wizard; on subsequent runs auto-joins the local mesh + starts the
@@ -2718,6 +2728,7 @@ async function _cmdPeers(ctx: Pick<ExtensionContext, "ui">): Promise<void> {
 async function _cmdRoot(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
   restartAuthority?: RootRestartAuthority,
+  options: RootOptions = {},
 ): Promise<void> {
   const rootLifecycleGeneration = restartAuthority?.rootLifecycleGeneration
     ?? _rootLifecycleGeneration;
@@ -2741,7 +2752,7 @@ async function _cmdRoot(
 
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
 
-  const run = _cmdRootInner(ctx, rootLifecycleGeneration);
+  const run = _cmdRootInner(ctx, rootLifecycleGeneration, options);
   _cmdRootInFlight = run;
   try {
     await run;
@@ -2753,6 +2764,7 @@ async function _cmdRoot(
 async function _cmdRootInner(
   ctx: Pick<ExtensionContext, "ui" | "cwd">,
   rootLifecycleGeneration: number,
+  options: RootOptions,
 ): Promise<void> {
   // A root retains its startup epoch through every pre-candidate await. This is
   // stronger than `_disposed`, which a same-module session_start intentionally
@@ -2833,12 +2845,14 @@ async function _cmdRootInner(
   // join entirely, leaving the agent (incl. daemons) fully idle.
   const config = loadLocalConfig(cwd);
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration)) return;
-  if (!_meshNode) await _cmdJoin(ctx);
+  if (!_meshNode) await _cmdJoin(ctx, options);
   // `_cmdJoin` returns void on a canceled/failed join, so recheck both the
   // root lifecycle and publication before bringing the Relay up.
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
-  if (effectiveAutoStartRelay(config) && _state === "idle") await _cmdStart(ctx);
+  if (effectiveAutoStartRelay(config) && _state === "idle") await _cmdStart(ctx, options);
   if (!_isCurrentRootLifecycle(rootLifecycleGeneration) || !_meshNode) return;
+  // Quiet: the mesh is up here, so only a relay that should run and does not is worth a line.
+  if (options.quiet && !(effectiveAutoStartRelay(config) && _state === "idle")) return;
   _cmdStatus(ctx);
 }
 
@@ -2870,7 +2884,7 @@ async function _cmdSetup(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   );
 }
 
-async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">, options: RootOptions = {}): Promise<void> {
   if (_state !== "idle") {
     ctx.ui.notify("[remote-pi] Already started.", "warning");
     return;
@@ -3002,7 +3016,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   // entry that surfaces in the app as a phantom legacy session.
   _myRoomMeta = roomMeta;
 
-  ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`, "info");
+  if (!options.quiet) ctx.ui.notify(`[remote-pi] Connecting to relay ${relayUrl} (source: ${source}, room: ${roomId})…`, "info");
 
   // Transport opens WebSocket; convert the canonical http(s):// stored
   // form to ws(s):// at this boundary. The relayUrl variable keeps the
@@ -3138,7 +3152,7 @@ async function _cmdStart(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<voi
   if (!createdProducer) _attachBridgeIfReady();
 
   _emitRelayState();  // → connected
-  ctx.ui.notify(`[remote-pi] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`, "info");
+  if (!options.quiet) ctx.ui.notify(`[remote-pi] state: started (peer=${myShort}) — Connected to relay ${relayUrl}`, "info");
 }
 
 /**
@@ -4305,7 +4319,7 @@ export function _deliverMeshMessageToAgentForTest(env: MeshEnvelope): void {
  * longer user-configurable: every Pi on the same machine joins the same
  * broker.
  */
-async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void> {
+async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">, options: RootOptions = {}): Promise<void> {
   const cwd = "cwd" in ctx ? (ctx as ExtensionCommandContext).cwd : process.cwd();
   const local = loadLocalConfig(cwd);
   const sessionName = LOCAL_SESSION_NAME;
@@ -4441,10 +4455,12 @@ async function _cmdJoin(ctx: Pick<ExtensionContext, "ui" | "cwd">): Promise<void
       details: { requested: requestedName, assigned, changed: assigned !== requestedName },
       display: false,
     });
-    ctx.ui.notify(
-      `[remote-pi] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
-      "info",
-    );
+    if (!options.quiet) {
+      ctx.ui.notify(
+        `[remote-pi] Joined local mesh as "${assigned}" (${peer.currentRole()})`,
+        "info",
+      );
+    }
     _refreshFooter(ctx);
     // Plan/25 Wave B/C: try to bring up cross-PC routing now that the
     // local broker exists. No-op if the relay isn't up yet (will fire

@@ -4975,6 +4975,51 @@ describe("session_start auto-init skips relay in print/-p mode (#44)", () => {
 
     expect(_hasMeshNodeForTest()).toBe(true);
   });
+
+  // Pi evaluates the module fresh on /reload, /new, /resume and /fork, so the
+  // auto-init runs again each time. The status block is for the first start; a
+  // healthy re-init after a session replacement says nothing.
+  const statusCalls = (ctx: ReturnType<typeof makeMockCtx>) =>
+    (ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.filter(([text]) => String(text).startsWith("[remote-pi]\n"));
+
+  test("the first start shows the status block", async () => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ agent_name: "StartAgent", auto_start_relay: true });
+    process.argv = ["node", "pi"];
+    const ctx = makeMockCtx("/home/user/projects/rp-start");
+    captureEventHandler("session_start")({ type: "session_start", reason: "startup" }, ctx);
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    expect(_hasMeshNodeForTest()).toBe(true);
+    expect(statusCalls(ctx)).toHaveLength(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("state: started"), "info");
+  });
+
+  test.each(["reload", "new", "resume", "fork"])("a healthy re-init after %s shows no status block", async (reason) => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ agent_name: "ReloadAgent", auto_start_relay: true });
+    process.argv = ["node", "pi"];
+    const ctx = makeMockCtx("/home/user/projects/rp-reload");
+    captureEventHandler("session_start")({ type: "session_start", reason }, ctx);
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    expect(_hasMeshNodeForTest()).toBe(true);
+    expect(statusCalls(ctx)).toHaveLength(0);
+    expect(relayInstances.length).toBeGreaterThan(0);
+    // No success chatter at all: "Joined local mesh", "Connecting to relay", "state: started".
+    expect((ctx.ui.notify as ReturnType<typeof vi.fn>).mock.calls.filter(([, level]) => level === "info")).toEqual([]);
+  });
+
+  test("a re-init after a reload still shows the status block when the relay did not start", async () => {
+    process.env["REMOTE_PI_DIRECT_CONFIG"] = JSON.stringify({ agent_name: "BrokenRelay", auto_start_relay: true });
+    process.argv = ["node", "pi"];
+    _defaultConnectImpl = async () => { throw new Error("relay down"); };
+    const ctx = makeMockCtx("/home/user/projects/rp-broken");
+    captureEventHandler("session_start")({ type: "session_start", reason: "reload" }, ctx);
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    expect(_hasMeshNodeForTest()).toBe(true);
+    expect(statusCalls(ctx)).toHaveLength(1);
+    expect(String(statusCalls(ctx)[0]![0])).toContain("Relay: off");
+  });
 });
 
 // ── relay reconnect with backoff ──────────────────────────────────────────────
